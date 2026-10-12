@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Study Buddy</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="hero">
+    <h1>📚 Study Buddy</h1>
+    <p>Paste your course notes — AI turns them into flashcards, quizzes, summaries and a hangman game.</p>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>Create a new study set</h2>
+      <form id="generate-form">
+        <textarea id="notes" name="notes" rows="12" required
+          placeholder="Paste your lecture notes, textbook chapter, or any study material here..."></textarea>
+        <button type="submit" id="generate-btn" class="btn-primary">✨ Generate study set</button>
+        <p id="status" class="status"></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Your study sets</h2>
+      {% if decks %}
+        <ul class="deck-list">
+        {% for d in decks %}
+          <li>
+            <a href="{{ url_for('deck', deck_id=d['id']) }}" class="deck-link">
+              <span class="deck-title">{{ d['title'] }}</span>
+              <span class="deck-date">{{ d['created_at'] }}</span>
+            </a>
+            <form action="{{ url_for('delete_deck', deck_id=d['id']) }}" method="post"
+                  onsubmit="return confirm('Delete this study set?');">
+              <button type="submit" class="btn-danger btn-small">✕</button>
+            </form>
+          </li>
+        {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No study sets yet — create your first one above!</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <footer>Study Buddy · GenAI project · powered by Google Gemini</footer>
+
+  <script>
+    const form = document.getElementById('generate-form');
+    const btn = document.getElementById('generate-btn');
+    const status = document.getElementById('status');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      btn.disabled = true;
+      btn.textContent = '⏳ Generating…';
+      status.textContent = 'The AI is reading your notes — this takes about 10–30 seconds.';
+      try {
+        const res = await fetch('/generate', { method: 'POST', body: new FormData(form) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        window.location.href = '/deck/' + data.deck_id;
+      } catch (err) {
+        status.textContent = '❌ ' + err.message;
+        btn.disabled = false;
+        btn.textContent = '✨ Generate study set';
+      }
+    });
+  </script>
+</body>
+</html>

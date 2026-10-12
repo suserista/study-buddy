@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ deck['title'] }} — Study Buddy</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="hero small">
+    <a href="/" class="back-link">← All study sets</a>
+    <h1>{{ deck['title'] }}</h1>
+  </header>
+
+  <main class="container">
+    <nav class="tabs">
+      <button class="tab active" data-tab="summary">📄 Summary</button>
+      <button class="tab" data-tab="flashcards">🗂️ Flashcards</button>
+      <button class="tab" data-tab="quiz">❓ Quiz</button>
+      <button class="tab" data-tab="hangman">🎯 Hangman</button>
+    </nav>
+
+    <section id="tab-summary" class="tab-content card active">
+      <h2>Summary</h2>
+      <p class="summary-text">{{ deck['summary'] }}</p>
+    </section>
+
+    <section id="tab-flashcards" class="tab-content card">
+      <h2>Flashcards <span id="card-counter" class="counter"></span></h2>
+      <div id="flashcard" class="flashcard" onclick="flipCard()">
+        <div class="flashcard-inner">
+          <div class="flashcard-face front">
+            <p class="label">QUESTION</p>
+            <p id="card-question" class="card-text"></p>
+            <p class="hint">Click to flip</p>
+          </div>
+          <div class="flashcard-face back">
+            <p class="label">ANSWER</p>
+            <p id="card-answer" class="card-text"></p>
+            <p class="hint">Click to flip back</p>
+          </div>
+        </div>
+      </div>
+      <div class="flashcard-controls">
+        <button class="btn-secondary" onclick="prevCard()">← Previous</button>
+        <button class="btn-secondary" onclick="nextCard()">Next →</button>
+      </div>
+    </section>
+
+    <section id="tab-quiz" class="tab-content card">
+      <h2>Quiz <span id="quiz-progress" class="counter"></span></h2>
+      <p id="quiz-question" class="quiz-question"></p>
+      <div id="quiz-options" class="quiz-options"></div>
+      <p id="quiz-result" class="quiz-result"></p>
+      <div id="quiz-final" class="quiz-final" style="display:none">
+        <h3 id="quiz-score"></h3>
+        <button class="btn-primary" onclick="startQuiz()">Try again</button>
+      </div>
+    </section>
+
+    <section id="tab-hangman" class="tab-content card">
+      <h2>Hangman</h2>
+      <div class="hangman-layout">
+        <svg viewBox="0 0 200 250" class="hangman-svg">
+          <line x1="20" y1="230" x2="180" y2="230" class="gallows"/>
+          <line x1="50" y1="230" x2="50" y2="20" class="gallows"/>
+          <line x1="50" y1="20" x2="130" y2="20" class="gallows"/>
+          <line x1="130" y1="20" x2="130" y2="45" class="gallows"/>
+          <circle id="hm-head" cx="130" cy="67" r="22" class="hm-part"/>
+          <line id="hm-body" x1="130" y1="89" x2="130" y2="150" class="hm-part"/>
+          <line id="hm-arm-l" x1="130" y1="108" x2="98" y2="132" class="hm-part"/>
+          <line id="hm-arm-r" x1="130" y1="108" x2="162" y2="132" class="hm-part"/>
+          <line id="hm-leg-l" x1="130" y1="150" x2="105" y2="196" class="hm-part"/>
+          <line id="hm-leg-r" x1="130" y1="150" x2="155" y2="196" class="hm-part"/>
+        </svg>
+        <div class="hangman-right">
+          <p id="hm-clue" class="hm-clue"></p>
+          <p id="hm-word" class="hm-word"></p>
+          <div id="hm-keyboard" class="hm-keyboard"></div>
+          <p id="hm-message" class="hm-message"></p>
+          <button class="btn-primary" onclick="newHangman()">🔄 New word</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const FLASHCARDS = {{ flashcards|tojson }};
+    const QUIZ = {{ quiz|tojson }};
+    const HANGMAN = {{ hangman|tojson }};
+  </script>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
