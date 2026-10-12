@@ -1,15 +1,16 @@
-"""Study Buddy — turn your course notes into flashcards, quizzes and games, powered by Google Gemini."""
+""" Study Buddy — turn your course notes into flashcards, quizzes and games, powered by Google Gemini. """
 
 import json
 import os
 import re
 import sqlite3
 import time
+import uuid
 from datetime import datetime
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session
 
 load_dotenv()
 
@@ -19,10 +20,18 @@ GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               + GEMINI_MODEL + ":generateContent")
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "studybuddy.db")
 
 if not GEMINI_API_KEY:
     print("WARNING: GEMINI_API_KEY is not set. Copy .env.example to .env and add your key.")
+
+
+def get_user_id():
+    """Every visitor gets a random ID stored in a browser cookie (Flask session)."""
+    if "user_id" not in session:
+        session["user_id"] = uuid.uuid4().hex
+    return session["user_id"]
 
 
 # ---------- database ----------
@@ -38,6 +47,7 @@ def init_db():
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS decks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
             title TEXT NOT NULL,
             summary TEXT NOT NULL,
             notes TEXT NOT NULL,
@@ -63,6 +73,11 @@ def init_db():
             answer TEXT NOT NULL
         );
     """)
+    # migration: databases created before user separation don't have the column yet
+    try:
+        conn.execute("ALTER TABLE decks ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # column already exists — nothing to do
     conn.commit()
     conn.close()
 
@@ -132,7 +147,9 @@ def call_gemini(notes: str) -> dict:
 @app.route("/")
 def index():
     conn = get_db()
-    decks = conn.execute("SELECT id, title, created_at FROM decks ORDER BY id DESC").fetchall()
+    decks = conn.execute(
+        "SELECT id, title, created_at FROM decks WHERE user_id = ? ORDER BY id DESC",
+        (get_user_id(),)).fetchall()
     conn.close()
     return render_template("index.html", decks=decks)
 
@@ -149,8 +166,8 @@ def generate():
 
     conn = get_db()
     cur = conn.execute(
-        "INSERT INTO decks (title, summary, notes, created_at) VALUES (?, ?, ?, ?)",
-        (result.get("title", "Untitled study set"), result.get("summary", ""), notes,
+        "INSERT INTO decks (user_id, title, summary, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+        (get_user_id(), result.get("title", "Untitled study set"), result.get("summary", ""), notes,
          datetime.now().strftime("%Y-%m-%d %H:%M")))
     deck_id = cur.lastrowid
 
@@ -174,7 +191,8 @@ def generate():
 @app.route("/deck/<int:deck_id>")
 def deck(deck_id):
     conn = get_db()
-    deck_row = conn.execute("SELECT * FROM decks WHERE id = ?", (deck_id,)).fetchone()
+    deck_row = conn.execute("SELECT * FROM decks WHERE id = ? AND user_id = ?",
+                            (deck_id, get_user_id())).fetchone()
     if deck_row is None:
         conn.close()
         return "Deck not found", 404
@@ -195,6 +213,11 @@ def deck(deck_id):
 @app.route("/deck/<int:deck_id>/delete", methods=["POST"])
 def delete_deck(deck_id):
     conn = get_db()
+    owner = conn.execute("SELECT id FROM decks WHERE id = ? AND user_id = ?",
+                         (deck_id, get_user_id())).fetchone()
+    if owner is None:
+        conn.close()
+        return redirect("/")
     conn.execute("DELETE FROM flashcards WHERE deck_id = ?", (deck_id,))
     conn.execute("DELETE FROM quiz WHERE deck_id = ?", (deck_id,))
     conn.execute("DELETE FROM hangman WHERE deck_id = ?", (deck_id,))
