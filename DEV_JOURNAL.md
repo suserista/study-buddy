@@ -100,3 +100,24 @@ Raised the gunicorn worker timeout from the 30s default to 180s — the retry lo
 Frontend now detects non-JSON responses and shows a readable error message instead of a raw parser error.
 
 Lesson: when a client shows a parsing error, the real bug is on the server — read the server logs. And timeouts across layers must be designed together, not individually.
+
+
+Entry 13 — Model-specific Gemini outage, diagnosed with a controlled experiment
+
+Problem: After the timeout fixes, generation still failed — now with "Network error while contacting the Gemini API" after ~2.5 minutes (matching 3 attempts x 45s exactly).
+
+Diagnosis (controlled experiments, one variable at a time):
+
+Ran a minimal request to Gemini directly from the server (bypassing the app): no answer for 120 seconds even for a one-word prompt -> the app was not the problem.
+
+Ran the identical request from my home PC: identical failure -> not an AWS/network problem.
+
+Queried Google's ListModels API and pinged each flash model individually: some models answered in under 1 second while gemini-3.8-flash (the one the earlier error message had recommended) returned silence. Conclusion: a model-specific outage at Google.
+
+Solution: Switched to a working model (gemini-flash-lite-latest) and added a fallback list — the app now tries models in order and only fails if ALL are down. Within 24 hours I had seen three different models fail in three different ways (404 retired, 503 busy, silent timeout), which is exactly why fallback chains are standard practice for external APIs.
+
+Lesson: When an external dependency fails: 
+(1) test the dependency directly, bypassingyour own code; 
+(2) test from a second location to rule out local network issues; 
+(3) consultthe dependency's own discovery endpoints for ground truth instead of trusting cached knowledge.
+

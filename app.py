@@ -1,4 +1,4 @@
-""" Study Buddy — turn your course notes into flashcards, quizzes and games, powered by Google Gemini. """
+"""Study Buddy — turn your course notes into flashcards, quizzes and games, powered by Google Gemini."""
 
 import json
 import os
@@ -15,9 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session
 load_dotenv()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-3.8-flash"
-GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
-              + GEMINI_MODEL + ":generateContent")
+GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-flash-latest"]
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
@@ -124,21 +122,24 @@ def call_gemini(notes: str) -> dict:
         "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json"},
     }
     last_error = None
-    for attempt in range(3):          # up to 3 attempts
-        try:
-            response = requests.post(GEMINI_URL, params={"key": GEMINI_API_KEY},
-                                     json=payload, timeout=45)
-            if response.status_code == 200:
-                text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(clean_json(text))
-            last_error = RuntimeError(
-                f"Gemini API error {response.status_code}: {response.text[:300]}")
-            if response.status_code != 503:   # only "busy" errors get retried
-                raise last_error
-        except requests.RequestException:     # network hiccups get retried too
-            last_error = RuntimeError("Network error while contacting the Gemini API.")
-        if attempt < 2:
-            time.sleep(5)   # wait 5 seconds before trying again
+    for model in GEMINI_MODELS:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
+        for attempt in range(2):          # 2 attempts per model
+            try:
+                response = requests.post(url, params={"key": GEMINI_API_KEY},
+                                         json=payload, timeout=45)
+                if response.status_code == 200:
+                    text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    return json.loads(clean_json(text))
+                last_error = RuntimeError(
+                    f"Gemini API error {response.status_code} on {model}: {response.text[:300]}")
+                if response.status_code != 503:   # only "busy" gets retried
+                    break
+            except (requests.RequestException, ValueError):
+                # network failure, or the model returned broken JSON -> try next model
+                last_error = RuntimeError(f"Request failed on model {model}.")
+                break
+            time.sleep(3)
     raise last_error
 
 
