@@ -46,9 +46,9 @@
     </section>
   </main>
 
-  <footer>Study Buddy · GenAI project · powered by Google Gemini</footer>
+  <footer>Study Buddy by Mr. Can · GenAI project · powered by Google Gemini</footer>
 
-  <script>
+    <script>
     const form = document.getElementById('generate-form');
     const btn = document.getElementById('generate-btn');
     const status = document.getElementById('status');
@@ -57,10 +57,15 @@
       e.preventDefault();
       btn.disabled = true;
       btn.textContent = '⏳ Generating…';
-      status.textContent = 'The AI is reading your notes — this takes about 10–30 seconds.';
+      status.textContent = 'The AI is reading your notes — usually 10–30 seconds, up to a minute if the AI service is busy.';
       try {
         const res = await fetch('/generate', { method: 'POST', body: new FormData(form) });
-        const data = await res.json();
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (parseError) {
+          throw new Error('The server returned an unexpected error page. Please wait a moment and try again.');
+        }
         if (!res.ok) throw new Error(data.error || 'Something went wrong');
         window.location.href = '/deck/' + data.deck_id;
       } catch (err) {

@@ -127,7 +127,7 @@ def call_gemini(notes: str) -> dict:
     for attempt in range(3):          # up to 3 attempts
         try:
             response = requests.post(GEMINI_URL, params={"key": GEMINI_API_KEY},
-                                     json=payload, timeout=90)
+                                     json=payload, timeout=45)
             if response.status_code == 200:
                 text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
                 return json.loads(clean_json(text))

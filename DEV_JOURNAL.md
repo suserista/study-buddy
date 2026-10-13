@@ -87,3 +87,16 @@ Solution: Implemented per-visitor separation using Flask sessions: each browser 
 
 Future improvement: real user accounts with login, so history survives across devices —out of scope for the deadline.
 
+Entry 12 — Server returned HTML instead of JSON (frontend crash)
+
+Problem: Testing from my phone after deployment, generation failed with a cryptic browser error: "Unexpected token '<'... is not valid JSON". The page loaded fine — the server was answering the generate request with an HTML error page, and the frontend JavaScript crashed trying to parse it as JSON, hiding the real cause.
+
+Diagnosis: Read the server logs (journalctl -u studybuddy) instead of guessing. Root cause: [FILL IN — e.g. gunicorn WORKER TIMEOUT while Gemini retries ran]
+
+Fixes applied:
+
+Raised the gunicorn worker timeout from the 30s default to 180s — the retry logic can legitimately need over 30 seconds when the Gemini API is busy, but gunicorn killed the worker first. The layer timeouts must fit together (requests timeout reduced to 45s so the worst case stays under 180s).
+
+Frontend now detects non-JSON responses and shows a readable error message instead of a raw parser error.
+
+Lesson: when a client shows a parsing error, the real bug is on the server — read the server logs. And timeouts across layers must be designed together, not individually.
