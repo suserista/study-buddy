@@ -52,13 +52,29 @@
     </section>
 
     <section id="tab-quiz" class="tab-content card">
-      <h2>Quiz <span id="quiz-progress" class="counter"></span></h2>
-      <p id="quiz-question" class="quiz-question"></p>
-      <div id="quiz-options" class="quiz-options"></div>
-      <p id="quiz-result" class="quiz-result"></p>
+      <h2 class="quiz-h2">Quiz <span id="quiz-progress" class="counter"></span>
+        <span id="quiz-best" class="best-badge" style="display:none"></span></h2>
+      <div class="quiz-progress-bar"><div id="quiz-bar-fill" class="quiz-bar-fill"></div></div>
+
+      <div id="quiz-stage">
+        <p id="quiz-question" class="quiz-question"></p>
+        <p id="quiz-type-hint" class="quiz-type-hint"></p>
+        <div id="quiz-answer-area"></div>
+        <div id="quiz-feedback" class="quiz-feedback" style="display:none">
+          <p id="quiz-result" class="quiz-result"></p>
+          <div id="quiz-explain" class="quiz-explain" style="display:none"></div>
+          <button id="quiz-next" class="btn-primary">Next question →</button>
+        </div>
+      </div>
+
       <div id="quiz-final" class="quiz-final" style="display:none">
-        <h3 id="quiz-score"></h3>
-        <button class="btn-primary" onclick="startQuiz()">Try again</button>
+        <div class="quiz-final-top">
+          <h3 id="quiz-score"></h3>
+          <p id="quiz-best-note" class="quiz-best-note"></p>
+          <button class="btn-primary" onclick="startQuiz()">🔄 Try again</button>
+        </div>
+        <h3 class="guide-block-title">📝 Answer review</h3>
+        <div id="quiz-review"></div>
       </div>
     </section>
 
@@ -88,11 +104,14 @@
     </section>
   </main>
 
+  <footer>Study Buddy by Mr. Can · GenAI project · powered by Google Gemini</footer>
+
   <script>
     const FLASHCARDS = {{ flashcards|tojson }};
     const QUIZ = {{ quiz|tojson }};
     const HANGMAN = {{ hangman|tojson }};
     const GUIDE = {{ guide|tojson }};
+    const QUIZ_BEST = {{ quiz_best|tojson }};
     const DECK_ID = {{ deck['id'] }};
   </script>
   <script src="{{ url_for('static', filename='script.js') }}"></script>

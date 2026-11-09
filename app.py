@@ -82,6 +82,23 @@ def init_db():
         conn.execute("ALTER TABLE decks ADD COLUMN study_guide TEXT")
     except sqlite3.OperationalError:
         pass  # column already exists — nothing to do
+    # migration v3: Quiz 2.0 — question types + explanations. Old questions have
+    # no qtype and are treated as plain multiple choice, so old decks keep working.
+    for column in ("qtype", "extra", "explanation"):
+        try:
+            conn.execute(f"ALTER TABLE quiz ADD COLUMN {column} TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists — nothing to do
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS quiz_best (
+            deck_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            best_score INTEGER NOT NULL,
+            total INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (deck_id, user_id)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -122,7 +139,12 @@ Read the NOTES below and respond with ONLY a valid JSON object (no markdown, no 
     "tips": ["concrete study tip for this material", "..."]
   }},
   "flashcards": [{{"question": "...", "answer": "..."}}],
-  "quiz": [{{"question": "...", "options": ["...", "...", "...", "..."], "correct_index": 0}}],
+  "quiz": [
+    {{"type": "mc", "question": "...", "options": ["...", "...", "...", "..."], "correct_index": 0, "explanation": "..."}},
+    {{"type": "tf", "question": "...", "answer": true, "explanation": "..."}},
+    {{"type": "fill", "question": "... ______ ...", "accepted": ["...", "..."], "explanation": "..."}},
+    {{"type": "match", "question": "Match each term with its meaning", "pairs": [{{"left": "...", "right": "..."}}], "explanation": "..."}}
+  ],
   "hangman": [{{"clue": "...", "answer": "WORD"}}]
 }}
 
@@ -133,9 +155,16 @@ Rules for the study guide:
 - 4-6 takeaways: the facts a student absolutely must remember from these notes.
 - 2-4 study tips that are concrete and specific to THIS material (not generic advice).
 
+Rules for the quiz (exactly 10 questions):
+- Mix of question types: 5-6 of type "mc", 2 of type "tf", 1-2 of type "fill", 1-2 of type "match". Mix the order, do not group same types together.
+- "mc": 4 options, correct_index 0-3. Vary which option is correct.
+- "tf": "answer" is true or false. The statement must be clearly true or clearly false.
+- "fill": the question contains exactly one blank written as ______ (six underscores), and "accepted" lists 1-3 acceptable short answers.
+- "match": "pairs" contains exactly 4 pairs, each {{"left": a short term, "right": its matching definition or translation}}. All "right" values must be different.
+- EVERY question has an "explanation": 1-2 sentences that teach the student WHY the answer is correct.
+
 Rules for the rest:
 - 8-12 flashcards covering the most important facts. Keep answers short (1-3 words when possible).
-- 5-6 quiz questions, each with exactly 4 options and correct_index 0-3. Vary which option is correct.
 - 6-8 hangman items. The answer must be ONE single word, UPPERCASE, using only letters A-Z (no spaces, digits, or special letters like Å, Ä, Ö). The clue must hint at the word without containing it.
 - Write everything in the same language as the notes.
 - Do NOT use markdown formatting (no **, no #, no bullet dashes) anywhere in the text.
@@ -260,6 +289,78 @@ def clean_guide(guide):
     return cleaned
 
 
+QUIZ_TYPES = ("mc", "tf", "fill", "match")
+
+
+def _clean_quiz_item(item):
+    """Validate and normalise one quiz question returned by Gemini.
+
+    Returns a tuple ready for the database
+    (question, options, correct_index, qtype, extra, explanation),
+    or None if the question is unusable — broken questions are skipped
+    so one bad item can not ruin the whole quiz.
+    """
+    if not isinstance(item, dict):
+        return None
+    qtype = str(item.get("type", "mc")).strip().lower()
+    if qtype not in QUIZ_TYPES:
+        qtype = "mc"
+    question = _strip_markdown(str(item.get("question", "")))
+    explanation = _strip_markdown(str(item.get("explanation", "")))
+    if not question:
+        return None
+
+    if qtype == "tf":
+        answer = str(item.get("answer")).strip().lower()
+        if answer == "true":
+            correct_index = 0
+        elif answer == "false":
+            correct_index = 1
+        else:
+            return None  # no clear true/false — unusable
+        return question, json.dumps(["True", "False"]), correct_index, "tf", None, explanation
+
+    if qtype == "fill":
+        if "___" not in question:
+            return None  # the blank is missing — the question would be confusing
+        accepted = []
+        for value in item.get("accepted", []):
+            text = _strip_markdown(str(value)).strip()
+            if text and text not in accepted:
+                accepted.append(text)
+        if not accepted:
+            return None
+        return question, "[]", 0, "fill", json.dumps({"accepted": accepted[:5]}), explanation
+
+    if qtype == "match":
+        pairs = []
+        for pair in item.get("pairs", []):
+            if not isinstance(pair, dict):
+                continue
+            left = _strip_markdown(str(pair.get("left", "")))
+            right = _strip_markdown(str(pair.get("right", "")))
+            if left and right and all(p["left"] != left for p in pairs):
+                pairs.append({"left": left, "right": right})
+        if len(pairs) < 3:
+            return None  # a matching question needs at least 3 pairs
+        return question, "[]", 0, "match", json.dumps({"pairs": pairs[:6]}), explanation
+
+    # default: multiple choice (also the only format decks made before Quiz 2.0 use)
+    options = []
+    for value in item.get("options", []):
+        text = _strip_markdown(str(value)).strip()
+        if text:
+            options.append(text)
+    if len(options) < 2:
+        return None
+    try:
+        correct_index = int(item.get("correct_index", 0))
+    except (TypeError, ValueError):
+        correct_index = 0
+    correct_index = max(0, min(correct_index, len(options) - 1))
+    return question, json.dumps(options[:6]), correct_index, "mc", None, explanation
+
+
 # ---------- routes ----------
 
 @app.route("/")
@@ -306,9 +407,13 @@ def generate():
         conn.execute("INSERT INTO flashcards (deck_id, question, answer) VALUES (?, ?, ?)",
                      (deck_id, card.get("question", ""), card.get("answer", "")))
     for item in result.get("quiz", []):
-        conn.execute("INSERT INTO quiz (deck_id, question, options, correct_index) VALUES (?, ?, ?, ?)",
-                     (deck_id, item.get("question", ""), json.dumps(item.get("options", [])),
-                      int(item.get("correct_index", 0))))
+        row = _clean_quiz_item(item)
+        if row is None:
+            continue  # skip unusable questions, keep the rest
+        conn.execute(
+            "INSERT INTO quiz (deck_id, question, options, correct_index, qtype, extra, explanation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (deck_id, *row))
     for item in result.get("hangman", []):
         answer = re.sub(r"[^A-Z]", "", str(item.get("answer", "")).upper())
         if answer:
@@ -330,9 +435,19 @@ def deck(deck_id):
     flashcards = [dict(r) for r in conn.execute(
         "SELECT question, answer FROM flashcards WHERE deck_id = ?", (deck_id,))]
     quiz = []
-    for row in conn.execute("SELECT question, options, correct_index FROM quiz WHERE deck_id = ?", (deck_id,)):
+    for row in conn.execute(
+            "SELECT question, options, correct_index, qtype, extra, explanation "
+            "FROM quiz WHERE deck_id = ? ORDER BY id", (deck_id,)):
         item = dict(row)
-        item["options"] = json.loads(item["options"])
+        item["options"] = json.loads(item["options"] or "[]")
+        item["qtype"] = item["qtype"] or "mc"
+        extra = json.loads(item["extra"]) if item["extra"] else {}
+        if item["qtype"] == "fill":
+            item["accepted"] = extra.get("accepted", [])
+        elif item["qtype"] == "match":
+            item["pairs"] = extra.get("pairs", [])
+        item["explanation"] = item["explanation"] or ""
+        del item["extra"]
         quiz.append(item)
     hangman = [dict(r) for r in conn.execute(
         "SELECT clue, answer FROM hangman WHERE deck_id = ?", (deck_id,))]
@@ -342,9 +457,13 @@ def deck(deck_id):
             guide = json.loads(deck_row["study_guide"])
         except ValueError:
             guide = None
+    best = conn.execute(
+        "SELECT best_score, total FROM quiz_best WHERE deck_id = ? AND user_id = ?",
+        (deck_id, get_user_id())).fetchone()
     conn.close()
     return render_template("deck.html", deck=dict(deck_row),
-                           flashcards=flashcards, quiz=quiz, hangman=hangman, guide=guide)
+                           flashcards=flashcards, quiz=quiz, hangman=hangman, guide=guide,
+                           quiz_best=dict(best) if best else None)
 
 
 @app.route("/deck/<int:deck_id>/explain", methods=["POST"])
@@ -369,6 +488,50 @@ def explain_section(deck_id):
     if not simpler:
         return jsonify({"error": "The AI returned an empty answer. Please try again."}), 502
     return jsonify({"content": simpler})
+
+
+@app.route("/deck/<int:deck_id>/quiz-score", methods=["POST"])
+def save_quiz_score(deck_id):
+    """Remember the student's best quiz score for this study set."""
+    user_id = get_user_id()
+    conn = get_db()
+    owner = conn.execute("SELECT id FROM decks WHERE id = ? AND user_id = ?",
+                         (deck_id, user_id)).fetchone()
+    if owner is None:
+        conn.close()
+        return jsonify({"error": "Study set not found."}), 404
+    # the total always comes from the database, so it can not be faked
+    total = conn.execute("SELECT COUNT(*) FROM quiz WHERE deck_id = ?",
+                         (deck_id,)).fetchone()[0]
+    data = request.get_json(silent=True) or {}
+    try:
+        score = int(data.get("score"))
+    except (TypeError, ValueError):
+        conn.close()
+        return jsonify({"error": "Invalid score."}), 400
+    if total <= 0 or not 0 <= score <= total:
+        conn.close()
+        return jsonify({"error": "Invalid score."}), 400
+
+    row = conn.execute("SELECT best_score FROM quiz_best WHERE deck_id = ? AND user_id = ?",
+                       (deck_id, user_id)).fetchone()
+    if row is None:
+        conn.execute("INSERT INTO quiz_best (deck_id, user_id, best_score, total, updated_at) "
+                     "VALUES (?, ?, ?, ?, ?)",
+                     (deck_id, user_id, score, total,
+                      datetime.now().strftime("%Y-%m-%d %H:%M")))
+        best, new_best = score, True
+    elif score > row["best_score"]:
+        conn.execute("UPDATE quiz_best SET best_score = ?, total = ?, updated_at = ? "
+                     "WHERE deck_id = ? AND user_id = ?",
+                     (score, total, datetime.now().strftime("%Y-%m-%d %H:%M"),
+                      deck_id, user_id))
+        best, new_best = score, True
+    else:
+        best, new_best = row["best_score"], False
+    conn.commit()
+    conn.close()
+    return jsonify({"best": best, "total": total, "new_best": new_best})
 
 
 @app.route("/deck/<int:deck_id>/delete", methods=["POST"])

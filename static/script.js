@@ -109,63 +109,313 @@ function flipCard() { document.getElementById('flashcard').classList.toggle('fli
 function nextCard() { if (cardIndex < FLASHCARDS.length - 1) { cardIndex++; renderCard(); } }
 function prevCard() { if (cardIndex > 0) { cardIndex--; renderCard(); } }
 
-// ---------- quiz ----------
-let quizIndex = 0;
+// ---------- quiz 2.0 ----------
+let quizOrder = [];   // question indices, shuffled freshly every round
+let quizPos = 0;
 let quizScore = 0;
+let quizAnswers = []; // what the student answered, for the end review
+
+const QUIZ_TYPE_HINTS = {
+  mc: 'Choose the best answer',
+  tf: 'True or false?',
+  fill: 'Type the missing word',
+  match: 'Match each pair — you need all of them for the point'
+};
+
+function shuffleList(list) {
+  const copy = [...list];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
 
 function startQuiz() {
   if (QUIZ.length === 0) {
     document.getElementById('quiz-question').textContent = 'No quiz questions were generated.';
+    document.getElementById('quiz-stage').style.display = 'none';
     return;
   }
-  quizIndex = 0;
+  quizOrder = shuffleList([...QUIZ.keys()]);
+  quizPos = 0;
   quizScore = 0;
+  quizAnswers = [];
   document.getElementById('quiz-final').style.display = 'none';
-  document.getElementById('quiz-result').textContent = '';
+  document.getElementById('quiz-stage').style.display = 'block';
   renderQuizQuestion();
 }
 
 function renderQuizQuestion() {
-  if (quizIndex >= QUIZ.length) return endQuiz();
-  const q = QUIZ[quizIndex];
-  document.getElementById('quiz-progress').textContent = (quizIndex + 1) + ' / ' + QUIZ.length;
+  if (quizPos >= quizOrder.length) return endQuiz();
+  const q = QUIZ[quizOrder[quizPos]];
+  document.getElementById('quiz-progress').textContent = (quizPos + 1) + ' / ' + quizOrder.length;
+  document.getElementById('quiz-bar-fill').style.width = (quizPos / quizOrder.length * 100) + '%';
   document.getElementById('quiz-question').textContent = q.question;
-  const box = document.getElementById('quiz-options');
-  box.innerHTML = '';
-  q.options.forEach((opt, i) => {
+  document.getElementById('quiz-type-hint').textContent = QUIZ_TYPE_HINTS[q.qtype] || QUIZ_TYPE_HINTS.mc;
+  document.getElementById('quiz-feedback').style.display = 'none';
+  const area = document.getElementById('quiz-answer-area');
+  area.innerHTML = '';
+
+  if (q.qtype === 'tf') renderTF(q, area);
+  else if (q.qtype === 'fill') renderFill(q, area);
+  else if (q.qtype === 'match') renderMatch(q, area);
+  else renderMC(q, area);   // 'mc' + anything unexpected falls back to multiple choice
+}
+
+function finishQuestion(q, info) {
+  if (info.ok) quizScore++;
+  quizAnswers.push({
+    question: q.question,
+    ok: info.ok,
+    given: info.given,
+    correct: info.correct,
+    explanation: q.explanation || ''
+  });
+  const result = document.getElementById('quiz-result');
+  result.textContent = info.ok
+    ? '✅ Correct!'
+    : (info.note || ('❌ Not quite — the correct answer is: ' + info.correct));
+  result.className = 'quiz-result ' + (info.ok ? 'ok' : 'bad');
+  const explain = document.getElementById('quiz-explain');
+  if (q.explanation) {
+    explain.textContent = '💡 ' + q.explanation;
+    explain.style.display = 'block';
+  } else {
+    explain.style.display = 'none';
+  }
+  document.getElementById('quiz-next').textContent =
+    quizPos + 1 >= quizOrder.length ? 'See your results →' : 'Next question →';
+  document.getElementById('quiz-feedback').style.display = 'block';
+  document.getElementById('quiz-next').focus();
+}
+
+// --- multiple choice ---
+function renderMC(q, area) {
+  shuffleList(q.options.map((text, i) => ({ text, i }))).forEach(opt => {
     const btn = document.createElement('button');
     btn.className = 'quiz-option';
-    btn.textContent = opt;
-    btn.onclick = () => answerQuiz(i, btn);
-    box.appendChild(btn);
+    btn.textContent = opt.text;
+    btn.dataset.orig = opt.i;
+    btn.onclick = () => {
+      const ok = opt.i === q.correct_index;
+      area.querySelectorAll('.quiz-option').forEach(b => {
+        b.disabled = true;
+        if (Number(b.dataset.orig) === q.correct_index) b.classList.add('correct');
+      });
+      if (!ok) btn.classList.add('wrong');
+      finishQuestion(q, { ok, given: q.options[opt.i], correct: q.options[q.correct_index] });
+    };
+    area.appendChild(btn);
   });
 }
 
-function answerQuiz(chosen, btn) {
-  const q = QUIZ[quizIndex];
-  const buttons = document.querySelectorAll('.quiz-option');
-  buttons.forEach(b => b.disabled = true);
-  buttons[q.correct_index].classList.add('correct');
-  if (chosen !== q.correct_index) btn.classList.add('wrong');
-  if (chosen === q.correct_index) quizScore++;
-  const res = document.getElementById('quiz-result');
-  res.textContent = chosen === q.correct_index
-    ? '✅ Correct!'
-    : '❌ Wrong — the answer is: ' + q.options[q.correct_index];
-  setTimeout(() => {
-    res.textContent = '';
-    quizIndex++;
-    renderQuizQuestion();
-  }, 1500);
+// --- true / false ---
+function renderTF(q, area) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tf-buttons';
+  [['✅ True', 0, 'True'], ['❌ False', 1, 'False']].forEach(([label, idx, name]) => {
+    const btn = document.createElement('button');
+    btn.className = 'tf-btn';
+    btn.textContent = label;
+    btn.onclick = () => {
+      const ok = idx === q.correct_index;
+      wrap.querySelectorAll('.tf-btn').forEach(b => b.disabled = true);
+      if (ok) {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        wrap.children[q.correct_index].classList.add('correct');
+      }
+      finishQuestion(q, { ok, given: name, correct: q.correct_index === 0 ? 'True' : 'False' });
+    };
+    wrap.appendChild(btn);
+  });
+  area.appendChild(wrap);
 }
 
-function endQuiz() {
-  document.getElementById('quiz-question').textContent = '';
-  document.getElementById('quiz-options').innerHTML = '';
-  document.getElementById('quiz-progress').textContent = '';
-  document.getElementById('quiz-final').style.display = 'block';
+// --- fill in the blank ---
+function normaliseAnswer(text) {
+  return String(text).toLowerCase().trim()
+    .replace(/[.,!?;:]+$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function oneTypoApart(a, b) {
+  // true when two answers differ by at most one small typo
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+function renderFill(q, area) {
+  const row = document.createElement('div');
+  row.className = 'fill-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'fill-input';
+  input.placeholder = 'Type your answer…';
+  input.autocomplete = 'off';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-primary';
+  btn.textContent = 'Check answer';
+  const check = () => {
+    if (btn.disabled) return;
+    const given = input.value.trim();
+    if (!given) {
+      input.classList.add('shake');
+      setTimeout(() => input.classList.remove('shake'), 400);
+      input.focus();
+      return;
+    }
+    btn.disabled = true;
+    input.disabled = true;
+    const typed = normaliseAnswer(given);
+    const accepted = (q.accepted || []).map(normaliseAnswer);
+    const ok = accepted.some(a => a === typed || (a.length >= 5 && oneTypoApart(a, typed)));
+    input.classList.add(ok ? 'fill-correct' : 'fill-wrong');
+    finishQuestion(q, { ok, given, correct: (q.accepted || ['—'])[0] });
+  };
+  btn.onclick = check;
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') check(); });
+  row.appendChild(input);
+  row.appendChild(btn);
+  area.appendChild(row);
+  input.focus({ preventScroll: true });
+}
+
+// --- matching ---
+function renderMatch(q, area) {
+  const pairs = q.pairs || [];
+  const rights = shuffleList(pairs.map(p => p.right));
+  const grid = document.createElement('div');
+  grid.className = 'match-grid';
+  const selects = [];
+  pairs.forEach(pair => {
+    const row = document.createElement('div');
+    row.className = 'match-row';
+    const left = document.createElement('div');
+    left.className = 'match-left';
+    left.textContent = pair.left;
+    const sel = document.createElement('select');
+    sel.className = 'match-select';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— choose —';
+    sel.appendChild(placeholder);
+    rights.forEach(r => {
+      const o = document.createElement('option');
+      o.value = r;
+      o.textContent = r;
+      sel.appendChild(o);
+    });
+    selects.push({ sel, right: pair.right });
+    row.appendChild(left);
+    row.appendChild(sel);
+    grid.appendChild(row);
+  });
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-primary';
+  btn.textContent = 'Check answers';
+  btn.onclick = () => {
+    if (btn.disabled) return;
+    if (selects.some(s => !s.sel.value)) {
+      btn.classList.add('shake');
+      setTimeout(() => btn.classList.remove('shake'), 400);
+      return;
+    }
+    btn.disabled = true;
+    let rightCount = 0;
+    selects.forEach(s => {
+      const ok = s.sel.value === s.right;
+      if (ok) rightCount++;
+      s.sel.disabled = true;
+      s.sel.classList.add(ok ? 'match-correct' : 'match-wrong');
+    });
+    const allOk = rightCount === pairs.length;
+    finishQuestion(q, {
+      ok: allOk,
+      given: pairs.map((p, i) => p.left + ' → ' + selects[i].sel.value),
+      correct: pairs.map(p => p.left + ' → ' + p.right),
+      note: '❌ ' + rightCount + ' of ' + pairs.length + ' pairs matched — you need all of them for the point.'
+    });
+  };
+  area.appendChild(grid);
+  area.appendChild(btn);
+}
+
+// --- end of quiz ---
+async function endQuiz() {
+  document.getElementById('quiz-stage').style.display = 'none';
+  document.getElementById('quiz-bar-fill').style.width = '100%';
+  document.getElementById('quiz-progress').textContent = quizOrder.length + ' / ' + quizOrder.length;
+  const share = quizScore / quizOrder.length;
+  const mood = share >= 0.9 ? '🎉' : share >= 0.6 ? '👍' : '💪';
   document.getElementById('quiz-score').textContent =
-    `You scored ${quizScore} out of ${QUIZ.length}!`;
+    mood + ' You scored ' + quizScore + ' out of ' + quizOrder.length + '!';
+
+  // answer review
+  const review = document.getElementById('quiz-review');
+  review.innerHTML = '';
+  quizAnswers.forEach(a => {
+    const item = document.createElement('div');
+    item.className = 'review-item';
+    let html = '<div class="review-head"><span>' + (a.ok ? '✅' : '❌') + '</span>' +
+               '<span class="review-q">' + esc(a.question) + '</span></div>';
+    if (Array.isArray(a.given)) {
+      html += '<div class="review-pairs">';
+      a.given.forEach((g, k) => {
+        const good = g === a.correct[k];
+        html += '<div class="review-pair ' + (good ? 'ok' : 'bad') + '">' + esc(g) +
+                (good ? '' : ' <span class="review-fix">→ ' + esc(a.correct[k]) + '</span>') + '</div>';
+      });
+      html += '</div>';
+    } else {
+      html += '<div class="review-answer">Your answer: <b class="' + (a.ok ? 'ok-text' : 'bad-text') + '">' +
+              esc(a.given) + '</b>' +
+              (a.ok ? '' : ' · correct: <b class="ok-text">' + esc(a.correct) + '</b>') + '</div>';
+    }
+    if (a.explanation) {
+      html += '<div class="review-explain">💡 ' + esc(a.explanation) + '</div>';
+    }
+    item.innerHTML = html;
+    review.appendChild(item);
+  });
+  document.getElementById('quiz-final').style.display = 'block';
+
+  // save the best score — if saving fails the quiz still works fine
+  const note = document.getElementById('quiz-best-note');
+  note.textContent = '';
+  try {
+    const res = await fetch('/deck/' + DECK_ID + '/quiz-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: quizScore })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      note.textContent = data.new_best
+        ? '🏆 New best score!'
+        : 'Your best so far: ' + data.best + ' / ' + data.total;
+      showBestBadge(data.best, data.total);
+    }
+  } catch (err) { /* offline — no problem */ }
+}
+
+function showBestBadge(best, total) {
+  const badge = document.getElementById('quiz-best');
+  if (!badge) return;
+  badge.textContent = '🏆 Best: ' + best + ' / ' + total;
+  badge.style.display = 'inline-block';
 }
 
 // ---------- hangman ----------
@@ -241,9 +491,11 @@ function checkWin() {
   }
 }
 
-// physical keyboard support
+// physical keyboard support (ignores typing inside quiz answer fields)
 document.addEventListener('keydown', (e) => {
   if (e.repeat) return;
+  const tag = ((e.target && e.target.tagName) || '').toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
   const key = e.key.toUpperCase();
   if (!/^[A-Z]$/.test(key)) return;
   const btn = [...document.querySelectorAll('.hm-key')].find(b => b.textContent === key);
@@ -255,3 +507,11 @@ renderGuide();
 renderCard();
 startQuiz();
 newHangman();
+
+const quizNextBtn = document.getElementById('quiz-next');
+if (quizNextBtn) {
+  quizNextBtn.addEventListener('click', () => { quizPos++; renderQuizQuestion(); });
+}
+if (typeof QUIZ_BEST !== 'undefined' && QUIZ_BEST) {
+  showBestBadge(QUIZ_BEST.best_score, QUIZ_BEST.total);
+}
