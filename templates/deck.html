@@ -14,15 +14,19 @@
 
   <main class="container">
     <nav class="tabs">
-      <button class="tab active" data-tab="summary">📄 Summary</button>
+      <button class="tab active" data-tab="guide">📘 Study Guide</button>
       <button class="tab" data-tab="flashcards">🗂️ Flashcards</button>
       <button class="tab" data-tab="quiz">❓ Quiz</button>
       <button class="tab" data-tab="hangman">🎯 Hangman</button>
     </nav>
 
-    <section id="tab-summary" class="tab-content card active">
-      <h2>Summary</h2>
-      <p class="summary-text">{{ deck['summary'] }}</p>
+    <section id="tab-guide" class="tab-content card active">
+      <h2>Study Guide</h2>
+      {% if guide %}
+        <div id="guide-root"></div>
+      {% else %}
+        <p class="summary-text">{{ deck['summary'] }}</p>
+      {% endif %}
     </section>
 
     <section id="tab-flashcards" class="tab-content card">
@@ -88,6 +92,8 @@
     const FLASHCARDS = {{ flashcards|tojson }};
     const QUIZ = {{ quiz|tojson }};
     const HANGMAN = {{ hangman|tojson }};
+    const GUIDE = {{ guide|tojson }};
+    const DECK_ID = {{ deck['id'] }};
   </script>
   <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>

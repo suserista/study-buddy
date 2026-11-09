@@ -18,6 +18,23 @@
       <form id="generate-form">
         <textarea id="notes" name="notes" rows="12" required
           placeholder="Paste your lecture notes, textbook chapter, or any study material here..."></textarea>
+        <div class="difficulty-wrap">
+          <span class="difficulty-label">Guide depth:</span>
+          <div class="difficulty" role="radiogroup" aria-label="Guide depth">
+            <label class="diff-option">
+              <input type="radio" name="difficulty" value="quick">
+              <span>⚡ Quick overview</span>
+            </label>
+            <label class="diff-option">
+              <input type="radio" name="difficulty" value="standard" checked>
+              <span>📖 Standard</span>
+            </label>
+            <label class="diff-option">
+              <input type="radio" name="difficulty" value="exam">
+              <span>🎯 Exam prep</span>
+            </label>
+          </div>
+        </div>
         <button type="submit" id="generate-btn" class="btn-primary">✨ Generate study set</button>
         <p id="status" class="status"></p>
       </form>

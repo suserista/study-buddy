@@ -1,0 +1,40 @@
+STEP 1 — STUDY GUIDE : WHAT CHANGED (5 files)
+=============================================
+
+app.py  (the brain)
+- The AI is now asked for a STRUCTURED study guide (overview, sections with
+  headings, key terms, takeaways, study tips) instead of one plain summary.
+- NEW: guide depth — Quick overview / Standard / Exam prep. The choice from
+  the home page changes what the AI is asked to write.
+- NEW: "Explain simpler" — a second, small AI call that rewrites ONE section
+  in simpler words (new route: /deck/<id>/explain).
+- NEW: automatic database migration — a "study_guide" column is added on
+  first start. Old study sets are untouched and keep working; if the AI ever
+  returns a broken guide, the app falls back to the old summary text.
+
+templates/index.html  (home page)
+- Three depth buttons added under the notes box (Standard is default).
+- Footer: NOT changed.
+
+templates/deck.html  (study set page)
+- "Summary" tab renamed to "Study Guide".
+- New study sets: render the structured guide.
+- Old study sets: show the old plain summary, exactly as before.
+
+static/script.js
+- Renders the guide (sections, key-term cards, takeaways, tips).
+- Handles the "Explain simpler" button: loading state, swap the section text,
+  friendly error message if the AI call fails.
+
+static/style.css
+- Styles for the depth buttons, the guide (intro box, sections, key-term
+  cards, lists) — same indigo/purple design language as the rest of the app.
+- Mobile: depth buttons stack vertically, key-term grid adapts.
+
+TESTED
+- 31 automated checks passed (generation, guide saving, explain, old decks,
+  security between visitors, broken-guide fallback, input validation).
+- Full click-through in a real browser: home -> generate (Exam prep) ->
+  guide renders -> Explain simpler works -> all 4 tabs still work ->
+  old deck still opens with its old summary. No JavaScript errors.
+- Design reviewed on desktop and mobile: no overlaps, no cut-off text.

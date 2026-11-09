@@ -109,3 +109,47 @@ textarea:focus { outline: none; border-color: #4f46e5; }
 footer { margin-top: auto; text-align: center; padding: 1rem; color: #999; font-size: .85rem; }
 
 @media (max-width: 640px) { .hangman-layout { flex-direction: column; } }
+
+/* ---------- guide depth selector (home page) ---------- */
+.difficulty-wrap { display: flex; align-items: center; gap: .8rem; margin-top: 1rem; flex-wrap: wrap; }
+.difficulty-label { font-size: .9rem; color: #666; font-weight: 600; }
+.difficulty { display: flex; gap: .3rem; background: #eef0fb; padding: .3rem; border-radius: 12px; }
+.diff-option input { display: none; }
+.diff-option span { display: block; padding: .45rem .95rem; border-radius: 9px; cursor: pointer;
+                    font-size: .9rem; color: #555; transition: all .15s ease; }
+.diff-option span:hover { color: #4f46e5; }
+.diff-option input:checked + span { background: #fff; color: #4f46e5; font-weight: 600;
+                                    box-shadow: 0 2px 8px rgba(79,70,229,.18); }
+
+/* ---------- study guide ---------- */
+.guide-overview { font-size: 1.05rem; color: #3a3f63; background: #f8f8fe;
+                 border-left: 4px solid #4f46e5; padding: .9rem 1.1rem;
+                 border-radius: 0 10px 10px 0; margin-bottom: 1.4rem; }
+
+.guide-section { margin-bottom: 1.5rem; padding-bottom: 1.2rem; border-bottom: 1px solid #f0f0f8; }
+.guide-section:last-of-type { border-bottom: none; }
+.guide-section h3 { font-size: 1.08rem; color: #1f2340; margin-bottom: .5rem; }
+.guide-section-text { color: #3a3f63; }
+.btn-explain { padding: .35rem .85rem; font-size: .85rem; margin-top: .7rem; }
+.guide-section.just-simplified { animation: softflash 1.4s ease; }
+@keyframes softflash { 0% { background: #f3f0ff; } 100% { background: transparent; } }
+.explain-note { font-size: .85rem; color: #c53030; margin-top: .5rem; }
+
+.guide-block-title { font-size: 1.05rem; color: #1f2340; margin: 1.6rem 0 .8rem; }
+
+.glossary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: .8rem; }
+.glossary-card { background: #fafaff; border: 1px solid #e8e8f6; border-radius: 12px;
+                 padding: .85rem 1rem; transition: transform .15s ease, box-shadow .15s ease; }
+.glossary-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(31,35,64,.08); }
+.glossary-term { font-weight: 700; color: #4f46e5; margin-bottom: .25rem; }
+.glossary-def { font-size: .92rem; color: #3a3f63; }
+
+.guide-list { list-style: none; }
+.guide-list li { position: relative; padding-left: 1.6rem; margin-bottom: .55rem; color: #3a3f63; }
+.guide-list.takeaways li::before { content: '★'; position: absolute; left: .15rem; color: #4f46e5; }
+.guide-list.tips li::before { content: '›'; position: absolute; left: .3rem; color: #4f46e5;
+                              font-weight: 700; font-size: 1.05rem; top: -.05rem; }
+
+@media (max-width: 640px) {
+  .difficulty-wrap { align-items: flex-start; flex-direction: column; gap: .5rem; }
+}

@@ -8,6 +8,89 @@ document.querySelectorAll('.tab').forEach(btn => {
   });
 });
 
+// ---------- study guide ----------
+
+// Safely show AI text: escapes HTML so nothing can break out of the page.
+function esc(text) {
+  const div = document.createElement('div');
+  div.textContent = text == null ? '' : String(text);
+  return div.innerHTML;
+}
+
+function renderGuide() {
+  const root = document.getElementById('guide-root');
+  if (!root || !GUIDE) return;   // old study sets have no guide — nothing to do
+
+  let html = '';
+  if (GUIDE.overview) {
+    html += `<p class="guide-overview">${esc(GUIDE.overview)}</p>`;
+  }
+
+  (GUIDE.sections || []).forEach((s, i) => {
+    html += `
+      <div class="guide-section" id="guide-section-${i}">
+        <h3>${esc(s.heading)}</h3>
+        <p class="guide-section-text">${esc(s.content)}</p>
+        <button class="btn-secondary btn-explain" onclick="explainSimpler(${i}, this)">✨ Explain simpler</button>
+      </div>`;
+  });
+
+  if ((GUIDE.glossary || []).length) {
+    html += '<h3 class="guide-block-title">🗂️ Key terms</h3><div class="glossary-grid">';
+    GUIDE.glossary.forEach(g => {
+      html += `<div class="glossary-card">
+                 <div class="glossary-term">${esc(g.term)}</div>
+                 <div class="glossary-def">${esc(g.definition)}</div>
+               </div>`;
+    });
+    html += '</div>';
+  }
+
+  if ((GUIDE.takeaways || []).length) {
+    html += '<h3 class="guide-block-title">⭐ Key takeaways</h3><ul class="guide-list takeaways">' +
+      GUIDE.takeaways.map(t => `<li>${esc(t)}</li>`).join('') + '</ul>';
+  }
+
+  if ((GUIDE.tips || []).length) {
+    html += '<h3 class="guide-block-title">💡 Study tips</h3><ul class="guide-list tips">' +
+      GUIDE.tips.map(t => `<li>${esc(t)}</li>`).join('') + '</ul>';
+  }
+
+  root.innerHTML = html;
+}
+
+async function explainSimpler(i, btn) {
+  const section = GUIDE.sections[i];
+  if (!section || btn.disabled) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Simplifying…';
+  try {
+    const res = await fetch(`/deck/${DECK_ID}/explain`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ heading: section.heading, content: section.content })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    GUIDE.sections[i].content = data.content;
+    renderGuide();
+    const el = document.getElementById('guide-section-' + i);
+    if (el) {
+      el.classList.add('just-simplified');
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = original;
+    const note = document.createElement('p');
+    note.className = 'explain-note';
+    note.textContent = '⚠️ ' + err.message;
+    btn.after(note);
+    setTimeout(() => note.remove(), 5000);
+  }
+}
+
 // ---------- flashcards ----------
 let cardIndex = 0;
 
@@ -168,6 +251,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- init ----------
+renderGuide();
 renderCard();
 startQuiz();
 newHangman();
