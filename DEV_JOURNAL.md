@@ -92,7 +92,7 @@ Entry 12 — Server returned HTML instead of JSON (frontend crash)
 
 Problem: Testing from my phone after deployment, generation failed with a cryptic browser error: "Unexpected token '<'... is not valid JSON". The page loaded fine — the server was answering the generate request with an HTML error page, and the frontend JavaScript crashed trying to parse it as JSON, hiding the real cause.
 
-Diagnosis: Read the server logs (journalctl -u studybuddy) instead of guessing. Root cause: \[FILL IN — e.g. gunicorn WORKER TIMEOUT while Gemini retries ran]
+Diagnosis: Read the server logs (journalctl -u studybuddy) instead of guessing. Root cause: gunicorn's default 30-second worker timeout killed the worker while the Gemini retry logic was still waiting for an answer.
 
 Fixes applied:
 
@@ -136,3 +136,59 @@ Solution:
 - Added an "Explain simpler" feature (/deck/<id>/explain endpoint) allowing users to trigger a targeted AI rewrite for any individual section on demand.
 - Implemented automatic, backward-compatible SQLite migration: added a `study_guide` column dynamically on startup without breaking existing decks. If the AI returns an unexpected structure, the app cleanly falls back to the classic summary text.
 - Updated templates (index.html, deck.html) and styled the new components (depth buttons, section cards, key term grid) maintaining responsive mobile/desktop design.
+
+
+
+Entry 15 — Quiz 2.0: mixed question types, explanations, best score (2026-11-09)
+Phase: Feature enhancement
+
+What was built:
+- The quiz was rebuilt from plain multiple choice into a 10-question round mixing four types: multiple choice, true/false, fill-in-the-blank and matching. Questions and answer options are reshuffled every round, so memorising the order does not help.
+- Every answer is followed by a short explanation of WHY it is correct, and the end screen shows a full answer review of all 10 questions.
+- The best score per study set is saved on the server and shown as a gold badge, with a "new best score" highlight.
+
+Problems solved:
+- Fill-in-the-blank was judged too strictly — one typo failed the whole answer. Solution: answers are normalised (case, punctuation, spacing) and answers of 5+ characters may still pass with one small typo.
+- The physical-keyboard listener for the hangman game also captured letters typed into the new quiz answer fields. Solution: the listener now ignores keystrokes that happen inside input, select and textarea elements.
+- One malformed AI question could break the whole quiz. Solution: every question is validated before saving, and unusable items are skipped instead of crashing the round.
+- A quiz score sent from the browser can be faked. Solution: the total is always counted from the database, and score range and ownership are checked on the server.
+
+Commit: 5d68623 "Quiz 2.0: mixed question types, explanations, best score + footer on deck page"
+Deployed and verified live: 2026-11-09
+
+
+
+Entry 16 — "Ask your notes": grounded chat about each study set (2026-11-10)
+Phase: Feature enhancement
+
+What was built:
+- A new "Ask" tab on every study set: the student types questions and the AI answers ONLY from that set's notes — same language as the question.
+- The prompt forbids inventing facts: if the notes do not cover the question, the AI must say so honestly.
+- The conversation is saved per study set and per visitor, so it survives a page refresh; the last 12 turns are sent back to the AI so it has memory of the conversation; a Clear chat button deletes everything.
+
+Problems solved:
+- A plain chatbot could have invented plausible-sounding facts. Solution: strict grounding prompt ("answer ONLY using the STUDY MATERIAL below") plus the honest "not in your notes" rule.
+- Sending the whole history every time would grow the token cost with every question. Solution: only the last 12 turns are included; the page shows up to 60.
+- Refreshing the page used to lose the conversation. Solution: history is stored in a new chat_messages table (automatic migration), rendered newest-last on load.
+
+Commit: 2a703b9 "Ask your notes: grounded chat about each study set"
+Deployed and verified live: 2026-11-10
+
+
+
+Entry 17 — Quick wins, credit guard and project polish (2026-11-10)
+Phase: Completion / hardening
+
+What was built:
+- "Try the example" button on the home page: a ready-made Photosynthesis study set appears instantly with ZERO Gemini calls, so the app can be demonstrated without notes and without spending budget. A second click returns the same deck instead of creating a duplicate.
+- Flashcard upgrades: shuffle, keyboard shortcuts (arrows, Space, S, G), "got it" tracking with a Still-learning mode (saved in the browser, survives refresh), read-aloud using the browser's built-in speech synthesis (free), and one-click export to Anki as a tab-separated file.
+- API rate limiting: every route that calls Gemini first checks a per-visitor limit (20 per hour, 60 per day) and a global daily cap (300), and answers with a friendly "take a break" message instead of a raw error.
+- Professional README with screenshots, GitHub About section with topics, and journal catch-up (Entries 15-17 plus the root cause filled into Entry 12).
+
+Problems solved:
+- Rate-limit counters stored in a Python variable would be wrong twice: gunicorn runs several worker processes (each with its own memory), and a restart would forget everything. Solution: the counters live in a new SQLite api_hits table — shared between workers and permanent.
+- The new flashcard shortcuts (S for shuffle, G for got-it) clashed with the hangman game, which listens for letters. Solution: hangman now only listens while its tab is open — which also fixes letters being "guessed" invisibly while browsing other tabs.
+- A real .apkg export would have needed a new Python package and a changed deployment. Solution: plain tab-separated text, which Anki imports natively (File > Import) — deployment stays `git pull` + restart.
+
+Commits: "Quick wins: example deck, flashcard upgrades, Anki export + API rate limiting" and "Add README with screenshots and complete the DEV_JOURNAL"
+Deployed and verified live: 2026-11-10
