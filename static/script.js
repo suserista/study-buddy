@@ -91,6 +91,117 @@ async function explainSimpler(i, btn) {
   }
 }
 
+// ---------- ask your notes (chat) ----------
+const CHAT_SUGGESTIONS = [
+  'Explain the main idea in simple words',
+  'What should I memorize for the exam?',
+  'Give me an example from the notes'
+];
+let chatBusy = false;
+
+function chatScroll() {
+  const box = document.getElementById('chat-messages');
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderChatMessage(role, content) {
+  const box = document.getElementById('chat-messages');
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble ' + role;
+  bubble.textContent = content;   // plain text only — AI answers can never inject HTML
+  box.appendChild(bubble);
+  return bubble;
+}
+
+function renderChatSuggestions() {
+  const wrap = document.getElementById('chat-suggestions');
+  wrap.innerHTML = '';
+  if (CHAT.length) return;   // conversation already started — no starter questions needed
+  CHAT_SUGGESTIONS.forEach(text => {
+    const chip = document.createElement('button');
+    chip.className = 'chat-chip';
+    chip.textContent = text;
+    chip.onclick = () => sendChat(text);
+    wrap.appendChild(chip);
+  });
+}
+
+function renderChat() {
+  document.getElementById('chat-messages').innerHTML = '';
+  CHAT.forEach(m => renderChatMessage(m.role, m.content));
+  renderChatSuggestions();
+  chatScroll();
+}
+
+function showChatError(message) {
+  const box = document.getElementById('chat-messages');
+  const note = document.createElement('p');
+  note.className = 'chat-error';
+  note.textContent = '⚠️ ' + message;
+  box.appendChild(note);
+  chatScroll();
+  setTimeout(() => note.remove(), 6000);
+}
+
+async function sendChat(prefilled) {
+  const input = document.getElementById('chat-input');
+  const sendBtn = document.getElementById('chat-send');
+  const question = (prefilled || input.value).trim();
+  if (chatBusy) return;
+  if (!question) {
+    input.classList.add('shake');
+    setTimeout(() => input.classList.remove('shake'), 400);
+    input.focus();
+    return;
+  }
+  chatBusy = true;
+  sendBtn.disabled = true;
+  if (!prefilled) { input.value = ''; input.style.height = 'auto'; }
+  document.getElementById('chat-suggestions').innerHTML = '';
+  const userBubble = renderChatMessage('user', question);
+  const thinking = renderChatMessage('assistant thinking', '…');
+  chatScroll();
+  try {
+    const res = await fetch('/deck/' + DECK_ID + '/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    CHAT.push({ role: 'user', content: question });
+    CHAT.push({ role: 'assistant', content: data.answer });
+    thinking.classList.remove('thinking');
+    thinking.textContent = data.answer;
+  } catch (err) {
+    // nothing was saved on the server — take the question back
+    thinking.remove();
+    userBubble.remove();
+    showChatError(err.message);
+    if (!prefilled) input.value = question;
+  } finally {
+    chatBusy = false;
+    sendBtn.disabled = false;
+    input.focus();
+    chatScroll();
+  }
+}
+
+async function clearChat() {
+  if (chatBusy || !CHAT.length) return;
+  if (!confirm('Clear the whole conversation for this study set?')) return;
+  try {
+    const res = await fetch('/deck/' + DECK_ID + '/clear-chat', { method: 'POST' });
+    if (!res.ok) throw new Error('Could not clear the chat.');
+  } catch (err) {
+    showChatError(err.message);
+    return;
+  }
+  CHAT.length = 0;
+  renderChat();
+  document.getElementById('chat-input').focus();
+}
+
 // ---------- flashcards ----------
 let cardIndex = 0;
 
@@ -504,6 +615,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- init ----------
 renderGuide();
+renderChat();
 renderCard();
 startQuiz();
 newHangman();
@@ -515,3 +627,21 @@ if (quizNextBtn) {
 if (typeof QUIZ_BEST !== 'undefined' && QUIZ_BEST) {
   showBestBadge(QUIZ_BEST.best_score, QUIZ_BEST.total);
 }
+
+const chatInput = document.getElementById('chat-input');
+if (chatInput) {
+  chatInput.addEventListener('input', () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+  });
+  chatInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();   // Enter sends, Shift+Enter makes a new line
+      sendChat();
+    }
+  });
+}
+const chatSendBtn = document.getElementById('chat-send');
+if (chatSendBtn) chatSendBtn.addEventListener('click', () => sendChat());
+const chatClearBtn = document.getElementById('chat-clear');
+if (chatClearBtn) chatClearBtn.addEventListener('click', clearChat);

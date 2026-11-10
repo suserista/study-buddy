@@ -99,6 +99,18 @@ def init_db():
             PRIMARY KEY (deck_id, user_id)
         )
     """)
+    # migration v4: "Ask your notes" chat. A new table only — old databases
+    # are not touched, the chat simply starts empty for every existing deck.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deck_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -186,6 +198,24 @@ SECTION HEADING: {heading}
 SECTION TEXT:
 {content}"""
 
+CHAT_PROMPT = """You are Study Buddy, a friendly study assistant. A student pasted their own
+course notes and asks you questions about them.
+
+Rules:
+- Answer ONLY using the STUDY MATERIAL below. If the answer is not in the material,
+  say honestly that these notes do not cover it — do not invent facts.
+- Keep answers short and clear: 1-4 sentences. For a list, put each item on its own line.
+- Write in the same language the student uses in their question.
+- Do NOT use markdown formatting (no **, no #). Plain text only.
+- You may use the earlier conversation for context (e.g. "as I said before...").
+
+STUDY MATERIAL:
+{notes}
+
+{history}STUDENT: {question}
+
+STUDY BUDDY:"""
+
 
 def clean_json(text: str) -> str:
     """Remove markdown code fences if the model added them anyway."""
@@ -196,11 +226,16 @@ def clean_json(text: str) -> str:
     return text.strip()
 
 
-def _gemini_request(prompt):
-    """Send one prompt to Gemini, trying each model in order. Returns parsed JSON."""
+def _gemini_request(prompt, as_json=True):
+    """Send one prompt to Gemini, trying each model in order.
+    Returns parsed JSON (as_json=True) or plain text (as_json=False)."""
+    if as_json:
+        generation = {"temperature": 0.4, "responseMimeType": "application/json"}
+    else:
+        generation = {"temperature": 0.3}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json"},
+        "generationConfig": generation,
     }
     last_error = None
     for model in GEMINI_MODELS:
@@ -211,7 +246,9 @@ def _gemini_request(prompt):
                                          json=payload, timeout=45)
                 if response.status_code == 200:
                     text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    return json.loads(clean_json(text))
+                    if as_json:
+                        return json.loads(clean_json(text))
+                    return text.strip()
                 last_error = RuntimeError(
                     f"Gemini API error {response.status_code} on {model}: {response.text[:300]}")
                 if response.status_code != 503:   # only "busy" gets retried
@@ -236,6 +273,13 @@ def call_gemini_explain(heading, content):
     """Rewrite ONE study guide section in simpler language."""
     result = _gemini_request(EXPLAIN_PROMPT.format(heading=heading, content=content))
     return str(result.get("content", "")).strip()
+
+
+def call_gemini_chat(notes, history, question):
+    """Answer a question about the student's own notes (grounded, with history)."""
+    prompt = CHAT_PROMPT.format(notes=notes[:10000], history=history,
+                                question=question[:1000])
+    return _gemini_request(prompt, as_json=False)
 
 
 def _strip_markdown(text):
@@ -460,10 +504,15 @@ def deck(deck_id):
     best = conn.execute(
         "SELECT best_score, total FROM quiz_best WHERE deck_id = ? AND user_id = ?",
         (deck_id, get_user_id())).fetchone()
+    # "Ask your notes" conversation — newest last, capped so the page stays light
+    chat_rows = conn.execute(
+        "SELECT role, content FROM chat_messages WHERE deck_id = ? AND user_id = ? "
+        "ORDER BY id DESC LIMIT 60", (deck_id, get_user_id())).fetchall()
+    chat = [dict(r) for r in reversed(chat_rows)]
     conn.close()
     return render_template("deck.html", deck=dict(deck_row),
                            flashcards=flashcards, quiz=quiz, hangman=hangman, guide=guide,
-                           quiz_best=dict(best) if best else None)
+                           quiz_best=dict(best) if best else None, chat=chat)
 
 
 @app.route("/deck/<int:deck_id>/explain", methods=["POST"])
@@ -488,6 +537,77 @@ def explain_section(deck_id):
     if not simpler:
         return jsonify({"error": "The AI returned an empty answer. Please try again."}), 502
     return jsonify({"content": simpler})
+
+
+def _format_chat_history(rows):
+    """Turn stored chat messages into prompt text. Empty conversation -> no block."""
+    if not rows:
+        return ""
+    lines = ["CONVERSATION SO FAR:"]
+    for row in rows:
+        who = "STUDENT" if row["role"] == "user" else "STUDY BUDDY"
+        lines.append(f"{who}: {row['content']}")
+    return "\n".join(lines) + "\n\n"
+
+
+@app.route("/deck/<int:deck_id>/ask", methods=["POST"])
+def ask_deck(deck_id):
+    """Answer a question about the deck's notes, grounded in the notes only."""
+    user_id = get_user_id()
+    conn = get_db()
+    deck_row = conn.execute("SELECT * FROM decks WHERE id = ? AND user_id = ?",
+                            (deck_id, user_id)).fetchone()
+    if deck_row is None:
+        conn.close()
+        return jsonify({"error": "Study set not found."}), 404
+
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question", "")).strip()[:1000]
+    if len(question) < 2:
+        conn.close()
+        return jsonify({"error": "Please type a question first."}), 400
+
+    # the last few turns give the AI conversation memory
+    history_rows = conn.execute(
+        "SELECT role, content FROM chat_messages WHERE deck_id = ? AND user_id = ? "
+        "ORDER BY id DESC LIMIT 12", (deck_id, user_id)).fetchall()
+    history = _format_chat_history(list(reversed([dict(r) for r in history_rows])))
+    conn.close()
+
+    try:
+        answer = call_gemini_chat(deck_row["notes"], history, question)
+    except Exception as exc:
+        # nothing is saved — the student can simply ask again
+        return jsonify({"error": f"Could not reach the AI: {exc}"}), 500
+    answer = str(answer or "").strip()
+    if not answer:
+        return jsonify({"error": "The AI returned an empty answer. Please try again."}), 502
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = get_db()
+    conn.execute("INSERT INTO chat_messages (deck_id, user_id, role, content, created_at) "
+                 "VALUES (?, ?, 'user', ?, ?)", (deck_id, user_id, question, now))
+    conn.execute("INSERT INTO chat_messages (deck_id, user_id, role, content, created_at) "
+                 "VALUES (?, ?, 'assistant', ?, ?)", (deck_id, user_id, answer, now))
+    conn.commit()
+    conn.close()
+    return jsonify({"question": question, "answer": answer})
+
+
+@app.route("/deck/<int:deck_id>/clear-chat", methods=["POST"])
+def clear_chat(deck_id):
+    """Delete the saved conversation for this study set."""
+    conn = get_db()
+    owner = conn.execute("SELECT id FROM decks WHERE id = ? AND user_id = ?",
+                         (deck_id, get_user_id())).fetchone()
+    if owner is None:
+        conn.close()
+        return jsonify({"error": "Study set not found."}), 404
+    conn.execute("DELETE FROM chat_messages WHERE deck_id = ? AND user_id = ?",
+                 (deck_id, get_user_id()))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
 
 @app.route("/deck/<int:deck_id>/quiz-score", methods=["POST"])
@@ -545,6 +665,8 @@ def delete_deck(deck_id):
     conn.execute("DELETE FROM flashcards WHERE deck_id = ?", (deck_id,))
     conn.execute("DELETE FROM quiz WHERE deck_id = ?", (deck_id,))
     conn.execute("DELETE FROM hangman WHERE deck_id = ?", (deck_id,))
+    conn.execute("DELETE FROM quiz_best WHERE deck_id = ?", (deck_id,))
+    conn.execute("DELETE FROM chat_messages WHERE deck_id = ?", (deck_id,))
     conn.execute("DELETE FROM decks WHERE id = ?", (deck_id,))
     conn.commit()
     conn.close()

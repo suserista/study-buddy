@@ -15,6 +15,7 @@
   <main class="container">
     <nav class="tabs">
       <button class="tab active" data-tab="guide">📘 Study Guide</button>
+      <button class="tab" data-tab="ask">💬 Ask</button>
       <button class="tab" data-tab="flashcards">🗂️ Flashcards</button>
       <button class="tab" data-tab="quiz">❓ Quiz</button>
       <button class="tab" data-tab="hangman">🎯 Hangman</button>
@@ -27,6 +28,19 @@
       {% else %}
         <p class="summary-text">{{ deck['summary'] }}</p>
       {% endif %}
+    </section>
+
+    <section id="tab-ask" class="tab-content card">
+      <h2>Ask your notes</h2>
+      <p class="ask-intro">Chat with your study set — answers use only what is in your notes.</p>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div id="chat-suggestions" class="chat-suggestions"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" class="chat-input" rows="1" maxlength="1000"
+                  placeholder="Ask anything about your notes…"></textarea>
+        <button id="chat-send" class="btn-primary chat-send">Send</button>
+      </div>
+      <button id="chat-clear" class="btn-secondary btn-small chat-clear">🗑️ Clear chat</button>
     </section>
 
     <section id="tab-flashcards" class="tab-content card">
@@ -112,6 +126,7 @@
     const HANGMAN = {{ hangman|tojson }};
     const GUIDE = {{ guide|tojson }};
     const QUIZ_BEST = {{ quiz_best|tojson }};
+    const CHAT = {{ chat|tojson }};
     const DECK_ID = {{ deck['id'] }};
   </script>
   <script src="{{ url_for('static', filename='script.js') }}"></script>
