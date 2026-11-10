@@ -38,6 +38,10 @@
         <button type="submit" id="generate-btn" class="btn-primary">✨ Generate study set</button>
         <p id="status" class="status"></p>
       </form>
+      <div class="example-wrap">
+        <p class="muted">No notes handy? Try a ready-made example instead — created instantly, no AI wait.</p>
+        <button type="button" id="example-btn" class="btn-secondary">🌱 Try the example study set</button>
+      </div>
     </section>
 
     <section class="card">
@@ -89,6 +93,28 @@
         status.textContent = '❌ ' + err.message;
         btn.disabled = false;
         btn.textContent = '✨ Generate study set';
+      }
+    });
+  </script>
+  <script>
+    const exampleBtn = document.getElementById('example-btn');
+    exampleBtn.addEventListener('click', async () => {
+      exampleBtn.disabled = true;
+      exampleBtn.textContent = '⏳ Creating…';
+      try {
+        const res = await fetch('/example', { method: 'POST' });
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (parseError) {
+          throw new Error('The server returned an unexpected error. Please wait a moment and try again.');
+        }
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        window.location.href = '/deck/' + data.deck_id;
+      } catch (err) {
+        status.textContent = '❌ ' + err.message;
+        exampleBtn.disabled = false;
+        exampleBtn.textContent = '🌱 Try the example study set';
       }
     });
   </script>

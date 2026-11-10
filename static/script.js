@@ -204,21 +204,167 @@ async function clearChat() {
 
 // ---------- flashcards ----------
 let cardIndex = 0;
+let cardOrder = [];        // which cards (indices into FLASHCARDS) are studied, and in what order
+let cardMode = 'all';      // 'all' or 'learning' (only the not-yet-known ones)
+let gotIt = loadGotIt();   // keys of the cards this browser marked as known
+
+function gotItStoreKey() { return 'sb_gotit_' + DECK_ID; }
+
+function loadGotIt() {
+  try { return new Set(JSON.parse(localStorage.getItem(gotItStoreKey()) || '[]')); }
+  catch (err) { return new Set(); }
+}
+
+function saveGotIt() {
+  try { localStorage.setItem(gotItStoreKey(), JSON.stringify([...gotIt])); } catch (err) {}
+}
+
+function cardKey(card, index) {
+  // stable key per card — database id when present, otherwise its position
+  return card && card.id != null ? 'c' + card.id : 'i' + index;
+}
+
+function isGotIt(i) { return gotIt.has(cardKey(FLASHCARDS[i], i)); }
+
+function currentCard() { return FLASHCARDS[cardOrder[cardIndex]]; }
+
+function rebuildCardOrder(shuffle) {
+  cardOrder = FLASHCARDS.map((c, i) => i);
+  if (cardMode === 'learning') cardOrder = cardOrder.filter(i => !isGotIt(i));
+  if (shuffle) cardOrder = shuffleList(cardOrder);
+  cardIndex = 0;
+}
+
+function updateGotItUi() {
+  const known = FLASHCARDS.reduce((n, c, i) => n + (isGotIt(i) ? 1 : 0), 0);
+  const chip = document.getElementById('fc-gotit-count');
+  const resetBtn = document.getElementById('fc-reset');
+  const learningBtn = document.getElementById('fc-mode-learning');
+  const gotBtn = document.getElementById('fc-gotit-btn');
+  if (chip) {
+    if (known > 0) {
+      chip.textContent = '✅ ' + known + ' / ' + FLASHCARDS.length + ' known';
+      chip.style.display = 'inline-block';
+    } else {
+      chip.style.display = 'none';
+    }
+  }
+  if (resetBtn) resetBtn.style.display = known > 0 ? 'inline' : 'none';
+  if (learningBtn) {
+    learningBtn.textContent = 'Still learning' +
+      (known > 0 ? ' (' + (FLASHCARDS.length - known) + ')' : '');
+  }
+  if (gotBtn) {
+    const i = cardOrder.length ? cardOrder[cardIndex] : -1;
+    const isKnown = i >= 0 && isGotIt(i);
+    gotBtn.classList.toggle('done', isKnown);
+    gotBtn.textContent = isKnown ? '↩️ Un-got it' : '✅ Got it';
+    document.getElementById('flashcard').classList.toggle('got-it', isKnown);
+  }
+}
 
 function renderCard() {
+  const cardEl = document.getElementById('flashcard');
+  const controls = document.getElementById('fc-controls');
+  const tools = document.getElementById('fc-tools');
+  const empty = document.getElementById('fc-empty');
+  const modes = document.getElementById('fc-modes');
+  const hint = document.getElementById('fc-keyboard-hint');
+
   if (FLASHCARDS.length === 0) {
     document.getElementById('card-question').textContent = 'No flashcards were generated.';
+    if (modes) modes.style.display = 'none';
+    if (controls) controls.style.display = 'none';
+    if (tools) tools.style.display = 'none';
+    if (hint) hint.style.display = 'none';
     return;
   }
-  document.getElementById('card-question').textContent = FLASHCARDS[cardIndex].question;
-  document.getElementById('card-answer').textContent = FLASHCARDS[cardIndex].answer;
-  document.getElementById('card-counter').textContent = (cardIndex + 1) + ' / ' + FLASHCARDS.length;
-  document.getElementById('flashcard').classList.remove('flipped');
+  if (modes) modes.style.display = 'flex';
+  if (cardOrder.length === 0) {
+    // "Still learning" mode with every card marked as known
+    cardEl.style.display = 'none';
+    if (controls) controls.style.display = 'none';
+    if (tools) tools.style.display = 'none';
+    if (hint) hint.style.display = 'none';
+    if (empty) {
+      empty.textContent = '🎉 You have marked every card as known — nice work! ' +
+        'Switch back to "All cards" or reset your progress.';
+      empty.style.display = 'block';
+    }
+    updateGotItUi();
+    return;
+  }
+  cardEl.style.display = '';
+  if (controls) controls.style.display = '';
+  if (tools) tools.style.display = '';
+  if (hint) hint.style.display = '';
+  if (empty) empty.style.display = 'none';
+  const card = currentCard();
+  document.getElementById('card-question').textContent = card.question;
+  document.getElementById('card-answer').textContent = card.answer;
+  document.getElementById('card-counter').textContent = (cardIndex + 1) + ' / ' + cardOrder.length;
+  cardEl.classList.remove('flipped');
+  updateGotItUi();
 }
 
 function flipCard() { document.getElementById('flashcard').classList.toggle('flipped'); }
-function nextCard() { if (cardIndex < FLASHCARDS.length - 1) { cardIndex++; renderCard(); } }
+
+function nextCard() { if (cardIndex < cardOrder.length - 1) { cardIndex++; renderCard(); } }
 function prevCard() { if (cardIndex > 0) { cardIndex--; renderCard(); } }
+
+function shuffleCards() {
+  if (cardOrder.length < 2) return;
+  rebuildCardOrder(true);
+  renderCard();
+}
+
+function setCardMode(mode) {
+  cardMode = mode;
+  document.getElementById('fc-mode-all').classList.toggle('active', mode === 'all');
+  document.getElementById('fc-mode-learning').classList.toggle('active', mode === 'learning');
+  rebuildCardOrder(false);
+  renderCard();
+}
+
+function toggleGotIt() {
+  if (!cardOrder.length) return;
+  const i = cardOrder[cardIndex];
+  const key = cardKey(FLASHCARDS[i], i);
+  if (gotIt.has(key)) gotIt.delete(key);
+  else gotIt.add(key);
+  saveGotIt();
+  if (cardMode === 'learning' && gotIt.has(key)) {
+    // a newly known card leaves the "still learning" pile
+    cardOrder.splice(cardIndex, 1);
+    if (cardIndex >= cardOrder.length) cardIndex = Math.max(0, cardOrder.length - 1);
+  }
+  renderCard();
+}
+
+function resetGotIt() {
+  if (!gotIt.size) return;
+  if (!confirm('Reset your "got it" progress for this study set?')) return;
+  gotIt = new Set();
+  saveGotIt();
+  rebuildCardOrder(false);
+  renderCard();
+}
+
+function readCardAloud() {
+  if (!('speechSynthesis' in window)) {
+    alert('Sorry — your browser does not support reading aloud.');
+    return;
+  }
+  if (speechSynthesis.speaking || speechSynthesis.pending) {
+    speechSynthesis.cancel();   // a second click stops the reading
+    return;
+  }
+  const card = currentCard();
+  if (!card) return;
+  const utterance = new SpeechSynthesisUtterance(card.question + '. ' + card.answer);
+  utterance.rate = 0.95;
+  speechSynthesis.speak(utterance);
+}
 
 // ---------- quiz 2.0 ----------
 let quizOrder = [];   // question indices, shuffled freshly every round
@@ -602,20 +748,40 @@ function checkWin() {
   }
 }
 
-// physical keyboard support (ignores typing inside quiz answer fields)
+// physical keyboard support — letters only reach the game while the hangman
+// tab is open (before, letters typed on other tabs guessed invisibly)
 document.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   const tag = ((e.target && e.target.tagName) || '').toLowerCase();
   if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  const hangTab = document.getElementById('tab-hangman');
+  if (!hangTab || !hangTab.classList.contains('active')) return;
   const key = e.key.toUpperCase();
   if (!/^[A-Z]$/.test(key)) return;
   const btn = [...document.querySelectorAll('.hm-key')].find(b => b.textContent === key);
   if (btn && !btn.disabled) guessLetter(key, btn);
 });
 
+// flashcard keyboard shortcuts (only while the flashcards tab is open)
+document.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  const tag = ((e.target && e.target.tagName) || '').toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  // Space/Enter belong to a focused button — let it click normally
+  if (tag === 'button' && (e.key === ' ' || e.key === 'Enter')) return;
+  const flashTab = document.getElementById('tab-flashcards');
+  if (!flashTab || !flashTab.classList.contains('active')) return;
+  if (e.key === 'ArrowRight') { e.preventDefault(); nextCard(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); prevCard(); }
+  else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flipCard(); }
+  else if (e.key.toLowerCase() === 's') { shuffleCards(); }
+  else if (e.key.toLowerCase() === 'g') { toggleGotIt(); }
+});
+
 // ---------- init ----------
 renderGuide();
 renderChat();
+rebuildCardOrder(false);
 renderCard();
 startQuiz();
 newHangman();

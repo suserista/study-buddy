@@ -44,7 +44,13 @@
     </section>
 
     <section id="tab-flashcards" class="tab-content card">
-      <h2>Flashcards <span id="card-counter" class="counter"></span></h2>
+      <h2>Flashcards <span id="card-counter" class="counter"></span>
+        <span id="fc-gotit-count" class="fc-gotit-count" style="display:none"></span></h2>
+      <div id="fc-modes" class="fc-modes" style="display:none">
+        <button type="button" class="fc-mode active" id="fc-mode-all" onclick="setCardMode('all')">All cards</button>
+        <button type="button" class="fc-mode" id="fc-mode-learning" onclick="setCardMode('learning')">Still learning</button>
+        <button type="button" class="fc-reset" id="fc-reset" onclick="resetGotIt()" style="display:none">Reset progress</button>
+      </div>
       <div id="flashcard" class="flashcard" onclick="flipCard()">
         <div class="flashcard-inner">
           <div class="flashcard-face front">
@@ -59,10 +65,20 @@
           </div>
         </div>
       </div>
-      <div class="flashcard-controls">
+      <div class="flashcard-controls" id="fc-controls">
         <button class="btn-secondary" onclick="prevCard()">← Previous</button>
         <button class="btn-secondary" onclick="nextCard()">Next →</button>
       </div>
+      <div class="fc-tools" id="fc-tools">
+        <button type="button" class="btn-secondary" onclick="shuffleCards()">🔀 Shuffle</button>
+        <button type="button" class="btn-secondary" id="fc-gotit-btn" onclick="toggleGotIt()">✅ Got it</button>
+        <button type="button" class="btn-secondary" onclick="readCardAloud()"
+                title="Reads the current card out loud — click again to stop">🔊 Read aloud</button>
+        <a class="fc-export" href="/deck/{{ deck['id'] }}/export"
+           title="Downloads a file you can import straight into Anki (File > Import)">⬇️ Export to Anki</a>
+      </div>
+      <p id="fc-empty" class="fc-empty" style="display:none"></p>
+      <p id="fc-keyboard-hint" class="fc-keyboard-hint">⌨️ Shortcuts: ← / → move · Space flips · S shuffles · G marks "got it"</p>
     </section>
 
     <section id="tab-quiz" class="tab-content card">

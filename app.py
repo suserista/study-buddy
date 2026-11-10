@@ -10,12 +10,25 @@ from datetime import datetime
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session
+from flask import Flask, Response, jsonify, redirect, render_template, request, session
+
+import example_deck
 
 load_dotenv()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+
+# ---------- API rate limiting ----------
+# Every route that asks Gemini something first calls check_rate_limit().
+# The limits exist so one visitor (or a script) can not drain the Gemini
+# budget — normal studying stays far below all three of them.
+RATE_LIMIT_PER_HOUR = 20      # Gemini calls per visitor per hour
+RATE_LIMIT_PER_DAY = 60       # Gemini calls per visitor per 24 hours
+RATE_LIMIT_GLOBAL_DAY = 300   # all visitors combined per 24 hours
+RATE_LIMIT_MESSAGE = (
+    "You have reached the study limit for now — please take a short break and "
+    "come back in about an hour. This keeps the AI free for everyone.")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
@@ -111,6 +124,17 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # migration v5: API rate limiting. Every Gemini call is logged with the
+    # visitor IP and a timestamp; the counts live in SQLite so the limits are
+    # shared between gunicorn workers and survive a restart.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS api_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            ts REAL NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_hits_ip_ts ON api_hits (ip, ts)")
     conn.commit()
     conn.close()
 
@@ -405,6 +429,51 @@ def _clean_quiz_item(item):
     return question, json.dumps(options[:6]), correct_index, "mc", None, explanation
 
 
+# ---------- API rate limiting ----------
+
+def _visitor_ip():
+    """Behind a proxy the real visitor IP arrives in X-Forwarded-For."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def check_rate_limit():
+    """Count this visitor's recent Gemini calls; log this one if there is room.
+
+    Returns None when the request may proceed, or a friendly error message
+    when a limit has been reached. Counting happens in the api_hits table
+    (not in memory) so the limits are shared between gunicorn workers and
+    survive a server restart.
+    """
+    ip = _visitor_ip()
+    now = time.time()
+    conn = get_db()
+    try:
+        per_hour = conn.execute(
+            "SELECT COUNT(*) FROM api_hits WHERE ip = ? AND ts > ?",
+            (ip, now - 3600)).fetchone()[0]
+        if per_hour >= RATE_LIMIT_PER_HOUR:
+            return RATE_LIMIT_MESSAGE
+        per_day = conn.execute(
+            "SELECT COUNT(*) FROM api_hits WHERE ip = ? AND ts > ?",
+            (ip, now - 86400)).fetchone()[0]
+        if per_day >= RATE_LIMIT_PER_DAY:
+            return RATE_LIMIT_MESSAGE
+        global_day = conn.execute(
+            "SELECT COUNT(*) FROM api_hits WHERE ts > ?", (now - 86400,)).fetchone()[0]
+        if global_day >= RATE_LIMIT_GLOBAL_DAY:
+            return RATE_LIMIT_MESSAGE
+        # the request passed — only now is it counted, so blocked tries do not stack up
+        conn.execute("INSERT INTO api_hits (ip, ts) VALUES (?, ?)", (ip, now))
+        conn.execute("DELETE FROM api_hits WHERE ts < ?", (now - 7 * 86400,))
+        conn.commit()
+        return None
+    finally:
+        conn.close()
+
+
 # ---------- routes ----------
 
 @app.route("/")
@@ -425,11 +494,27 @@ def generate():
         difficulty = "standard"
     if len(notes) < 40:
         return jsonify({"error": "Please paste more text (at least a few sentences)."}), 400
+    limit = check_rate_limit()
+    if limit:
+        return jsonify({"error": limit}), 429
     try:
         result = call_gemini(notes, difficulty)
     except Exception as exc:
         return jsonify({"error": f"Generation failed: {exc}"}), 500
 
+    conn = get_db()
+    deck_id = _save_study_set(conn, get_user_id(), notes, result)
+    conn.commit()
+    conn.close()
+    return jsonify({"deck_id": deck_id})
+
+
+def _save_study_set(conn, user_id, notes, result):
+    """Save one study set (AI-generated or pre-made example) and return its id.
+
+    Shared by /generate and /example so the demo deck goes through exactly
+    the same validation and storage as a real generated one.
+    """
     guide = clean_guide(result.get("guide"))
     # The old plain-text summary stays as a fallback: if the guide is missing,
     # the study set still opens and shows the summary like before.
@@ -438,11 +523,10 @@ def generate():
     else:
         summary_text = _strip_markdown(str(result.get("summary", "")))[:1000]
 
-    conn = get_db()
     cur = conn.execute(
         "INSERT INTO decks (user_id, title, summary, notes, created_at, study_guide) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (get_user_id(), result.get("title", "Untitled study set"), summary_text, notes,
+        (user_id, result.get("title", "Untitled study set"), summary_text, notes,
          datetime.now().strftime("%Y-%m-%d %H:%M"),
          json.dumps(guide) if guide else None))
     deck_id = cur.lastrowid
@@ -463,6 +547,26 @@ def generate():
         if answer:
             conn.execute("INSERT INTO hangman (deck_id, clue, answer) VALUES (?, ?, ?)",
                          (deck_id, item.get("clue", ""), answer))
+    return deck_id
+
+
+@app.route("/example", methods=["POST"])
+def create_example():
+    """Add the ready-made demo study set — instantly, with zero Gemini calls.
+
+    If this browser already has the example deck, return that one instead of
+    creating a second copy.
+    """
+    user_id = get_user_id()
+    conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM decks WHERE user_id = ? AND title = ? ORDER BY id DESC LIMIT 1",
+        (user_id, example_deck.EXAMPLE_TITLE)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({"deck_id": existing["id"]})
+    deck_id = _save_study_set(conn, user_id,
+                              example_deck.EXAMPLE_NOTES, example_deck.EXAMPLE_DECK)
     conn.commit()
     conn.close()
     return jsonify({"deck_id": deck_id})
@@ -477,7 +581,8 @@ def deck(deck_id):
         conn.close()
         return "Deck not found", 404
     flashcards = [dict(r) for r in conn.execute(
-        "SELECT question, answer FROM flashcards WHERE deck_id = ?", (deck_id,))]
+        "SELECT id, question, answer FROM flashcards WHERE deck_id = ? ORDER BY id",
+        (deck_id,))]
     quiz = []
     for row in conn.execute(
             "SELECT question, options, correct_index, qtype, extra, explanation "
@@ -530,6 +635,9 @@ def explain_section(deck_id):
     content = str(data.get("content", ""))[:4000]
     if len(content) < 10:
         return jsonify({"error": "Nothing to simplify."}), 400
+    limit = check_rate_limit()
+    if limit:
+        return jsonify({"error": limit}), 429
     try:
         simpler = call_gemini_explain(heading, content)
     except Exception as exc:
@@ -573,6 +681,10 @@ def ask_deck(deck_id):
         "ORDER BY id DESC LIMIT 12", (deck_id, user_id)).fetchall()
     history = _format_chat_history(list(reversed([dict(r) for r in history_rows])))
     conn.close()
+
+    limit = check_rate_limit()
+    if limit:
+        return jsonify({"error": limit}), 429
 
     try:
         answer = call_gemini_chat(deck_row["notes"], history, question)
@@ -652,6 +764,40 @@ def save_quiz_score(deck_id):
     conn.commit()
     conn.close()
     return jsonify({"best": best, "total": total, "new_best": new_best})
+
+
+@app.route("/deck/<int:deck_id>/export")
+def export_deck(deck_id):
+    """Download this study set's flashcards as a file Anki can import directly.
+
+    Plain tab-separated text, one card per line (question<TAB>answer) — Anki
+    imports it natively via File > Import, so no extra dependencies and no
+    changed deployment are needed.
+    """
+    conn = get_db()
+    deck_row = conn.execute("SELECT id, title FROM decks WHERE id = ? AND user_id = ?",
+                            (deck_id, get_user_id())).fetchone()
+    if deck_row is None:
+        conn.close()
+        return "Deck not found", 404
+    cards = conn.execute(
+        "SELECT question, answer FROM flashcards WHERE deck_id = ? ORDER BY id",
+        (deck_id,)).fetchall()
+    conn.close()
+
+    lines = []
+    for card in cards:
+        front = str(card["question"]).replace("\t", " ").replace("\n", " ").replace("\r", " ").strip()
+        back = str(card["answer"]).replace("\t", " ").replace("\n", " ").replace("\r", " ").strip()
+        if front or back:
+            lines.append(front + "\t" + back)
+    if not lines:
+        return jsonify({"error": "This study set has no flashcards to export."}), 400
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", str(deck_row["title"])).strip("-").lower() or "study-set"
+    return Response(
+        "\n".join(lines) + "\n",
+        mimetype="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename=anki-{slug}.txt"})
 
 
 @app.route("/deck/<int:deck_id>/delete", methods=["POST"])
